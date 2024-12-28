@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Screenshot Analysis</title>
+    <title>Screenshot Analysis Chat</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -15,6 +15,27 @@
             display: flex;
             flex-direction: column;
             gap: 20px;
+        }
+        .chat-container {
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            padding: 20px;
+            height: 400px;
+            overflow-y: auto;
+            margin-bottom: 20px;
+        }
+        .message {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .user-message {
+            background-color: #e3f2fd;
+            margin-left: 20%;
+        }
+        .assistant-message {
+            background-color: #f5f5f5;
+            margin-right: 20%;
         }
         .upload-section {
             border: 2px dashed #ccc;
@@ -52,13 +73,6 @@
             max-width: 100%;
             height: auto;
         }
-        .response-container {
-            flex: 1;
-            min-width: 300px;
-            padding: 20px;
-            background-color: #f5f5f5;
-            border-radius: 5px;
-        }
         .loading {
             display: none;
             text-align: center;
@@ -75,30 +89,41 @@
         button:hover {
             background-color: #0056b3;
         }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        #clearButton {
+            background-color: #dc3545;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Screenshot Analysis</h1>
+        <h1>Screenshot Analysis Chat</h1>
+        
+        <div class="chat-container" id="chatContainer"></div>
         
         <div class="upload-section">
-            <form id="uploadForm">
+            <form id="chatForm">
                 <div class="form-group">
-                    <label for="promptInput">Detection Prompt:</label>
-                    <input type="text" id="promptInput" class="prompt-input" 
-                           value="Detect the 2d bounding box of the 'General' button in this iOS settings screenshot" 
-                           required>
+                    <label for="promptInput">Message:</label>
+                    <input type="text" id="promptInput" class="prompt-input" required>
                 </div>
-                <div class="form-group">
-                    <label for="imageInput">Upload Image:</label>
-                    <input type="file" id="imageInput" accept="image/*" required>
+                <div class="form-group" id="fileUploadGroup" style="display: none;">
+                    <label for="imageInput">Upload Screenshot:</label>
+                    <input type="file" id="imageInput" accept="image/*">
                 </div>
-                <button type="submit">Analyze Image</button>
+                <div class="controls">
+                    <button type="submit">Send</button>
+                    <button type="button" id="clearButton">Clear Chat</button>
+                </div>
             </form>
         </div>
 
         <div id="loading" class="loading">
-            Analyzing image... Please wait...
+            Processing... Please wait...
         </div>
 
         <div class="results" id="results" style="display: none;">
@@ -110,37 +135,54 @@
                 <h3>Resized (1024x1024)</h3>
                 <img id="resizedImage" alt="Resized annotated image">
             </div>
-            <div class="response-container">
-                <h3>Gemini Response</h3>
-                <pre id="geminiResponse"></pre>
-            </div>
         </div>
     </div>
 
     <script>
-        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+        let currentSessionId = null;
+        const chatContainer = document.getElementById('chatContainer');
+        const fileUploadGroup = document.getElementById('fileUploadGroup');
+        
+        function addMessage(text, isUser) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user-message' : 'assistant-message'}`;
+            messageDiv.textContent = text;
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        document.getElementById('chatForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
-            const fileInput = document.getElementById('imageInput');
-            const file = fileInput.files[0];
-            if (!file) {
-                alert('Please select an image file');
+            const promptInput = document.getElementById('promptInput');
+            const imageInput = document.getElementById('imageInput');
+            const prompt = promptInput.value;
+            const file = imageInput.files[0];
+
+            if (!prompt) {
+                alert('Please enter a message');
                 return;
             }
 
             // Show loading state
             document.getElementById('loading').style.display = 'block';
-            document.getElementById('results').style.display = 'none';
-
-            const prompt = document.getElementById('promptInput').value;
-            const formData = new FormData();
-            formData.append('file', file);
-            formData.append('prompt', prompt);
-
+            
             try {
-                const response = await fetch('/analyze/', {
+                addMessage(prompt, true);
+                
+                const formData = new FormData();
+                formData.append('prompt', prompt);
+                if (currentSessionId) {
+                    formData.append('session_id', currentSessionId);
+                }
+                if (file) {
+                    formData.append('file', file);
+                }
+
+                const response = await fetch('/process_prompt/', {
                     method: 'POST',
                     body: formData
+                    
                 });
 
                 if (!response.ok) {
@@ -148,20 +190,75 @@
                 }
 
                 const data = await response.json();
+                if (data.session_id) {
+                    currentSessionId = data.session_id;
+                }
                 
-                // Update the images and response
-                document.getElementById('originalImage').src = data.original_image;
-                document.getElementById('resizedImage').src = data.resized_image;
-                document.getElementById('geminiResponse').textContent = data.gemini_response;
-                
-                // Show results
-                document.getElementById('results').style.display = 'flex';
+                switch (data.action) {
+                    case 'screenshot':
+                        fileUploadGroup.style.display = 'block';
+                        addMessage("Please provide a screenshot to proceed", false);
+                        document.getElementById('results').style.display = 'none';
+                        break;
+                    case 'success':
+                        fileUploadGroup.style.display = 'none';
+                        addMessage(data.gemini_response, false);
+                        document.getElementById('results').style.display = 'none';
+                        break;
+                    case 'image_analysis':
+                        fileUploadGroup.style.display = 'none';
+                        document.getElementById('originalImage').src = data.original_image;
+                        document.getElementById('resizedImage').src = data.resized_image;
+                        document.getElementById('results').style.display = 'flex';
+                        addMessage(data.gemini_response, false);
+                        break;
+                    case 'error':
+                        addMessage(data.message, false);
+                        break;
+                }
+
+                // Clear inputs
+                promptInput.value = '';
+                if (file) {
+                    imageInput.value = '';
+                }
+
             } catch (error) {
                 console.error('Error:', error);
-                alert('An error occurred while analyzing the image');
+                addMessage('An error occurred while processing your request', false);
             } finally {
                 // Hide loading state
                 document.getElementById('loading').style.display = 'none';
+            }
+        });
+
+        document.getElementById('clearButton').addEventListener('click', async () => {
+            try {
+                if (currentSessionId) {
+                    const formData = new FormData();
+                    formData.append('session_id', currentSessionId);
+                    
+                    const response = await fetch('/clear_session/', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+
+                    currentSessionId = null;
+                }
+                
+                // Clear the chat container and hide results
+                chatContainer.innerHTML = '';
+                document.getElementById('results').style.display = 'none';
+                fileUploadGroup.style.display = 'none';
+                
+                addMessage('Chat session cleared. How can I help you?', false);
+            } catch (error) {
+                console.error('Error clearing session:', error);
+                addMessage('An error occurred while clearing the session', false);
             }
         });
     </script>
